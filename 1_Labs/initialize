@@ -1,0 +1,52 @@
+#!/bin/bash
+
+# initialize the data to be able to run a specified number of labs
+
+DIR="$(dirname "$0")"
+TERRAFORM="$DIR/terraform.sh"
+LAB_CONFIG_FILE="$DIR/common_infra/config.tf"
+PASSWORD_FILE="$DIR/per_lab_infra/jump_password.csv"
+PASSWORD_LEN=10
+PASSWORD_CHARS='A-HJ-NP-Za-hj-np-z2-9' # avoid hard to read chars like o/O/0, I/l/1/i
+SSH_KEY_DIR="$DIR/ssh-keys"
+
+# Parse the max number of labs
+if [[ $# -lt 1 ]]; then
+  echo "Usage: ${0##*/} <max_lab_count>"
+  exit 1
+fi
+
+# ensure it is a number
+declare max_lab_count="$1"
+if ! [[ "$max_lab_count" =~ ^[0-9]+$ ]]; then
+  echo "Error: max_lab_count must be a valid number, not '$max_lab_count'"
+  exit 1
+fi
+
+# generate the right number of password
+function gen_pass() {
+  < /dev/urandom tr -dc "${PASSWORD_CHARS}" | head -c "${PASSWORD_LEN}"; echo;
+}
+echo "lab_id,password" > "$PASSWORD_FILE"
+for ((i = 0; i < max_lab_count; i++)); do
+  echo "$i,$(gen_pass)" >> "$PASSWORD_FILE"
+done
+
+# update the common_lab/config.tf to mirror the number of max labs
+# max lab count locals
+sed -ri '/^locals\s*\{/,/\}/ {
+  s/^(\s*max_lab_count\s*)=.*$/\1= '"$max_lab_count"'  # if changed change it also in lab_count validation/
+}' "$LAB_CONFIG_FILE"
+# lab_count validation
+sed -ri '/^variable\s+"lab_count"\s*\{/,/\}/ {
+  /^\s*validation\s*\{/,/\}/ {
+    s/^(\s*condition\s*)=.*$/\1= var.lab_count > 0 \&\& var.lab_count <= '"$max_lab_count"'  # if changed change it also in max_lab_count validation/
+  }
+}' "$LAB_CONFIG_FILE"
+
+# initialize the SSH key
+mkdir -p "$SSH_KEY_DIR"
+ssh-keygen -t rsa -b 4096 -f ssh-keys/id_rsa
+
+# Initialize terraform
+"$TERRAFORM" init

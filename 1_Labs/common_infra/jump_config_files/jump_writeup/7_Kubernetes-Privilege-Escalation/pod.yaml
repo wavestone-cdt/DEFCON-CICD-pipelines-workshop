@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-pod
+  namespace: monitoring-app
+spec:
+  hostPID: true
+  containers:
+  - name: container
+    image: {PLACEHOLDER_KALI_REPO_URL}
+    imagePullPolicy: IfNotPresent
+    securityContext:
+      privileged: true
+    volumeMounts:
+    - mountPath: /host
+      name: nodemount
+    command: [ "/bin/sh", "-c", "--" ]
+    args: [ "apt-get update; apt-get install -y curl iproute2 nmap; while true; do sleep 30; done;" ]
+  #nodeName: master-0
+  volumes:
+  - name: nodemount
+    hostPath:
+      path: /

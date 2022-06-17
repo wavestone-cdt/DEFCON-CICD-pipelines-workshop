@@ -1,0 +1,9 @@
+#!/bin/bash
+
+set -e
+
+PARALLEL="${PARALLEL:-10}"
+TERRAFORM="$(dirname "$0")/terraform.sh"
+
+# Destroy everything
+"$TERRAFORM" destroy -auto-approve --parallel "$PARALLEL" "$@"

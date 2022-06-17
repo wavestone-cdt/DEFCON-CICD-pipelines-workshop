@@ -1,0 +1,50 @@
+#!/bin/bash
+
+PARALLEL="${PARALLEL:-10}"
+TERRAFORM="$(dirname "$0")/terraform.sh"
+ECR_URL="203035179660.dkr.ecr.us-west-1.amazonaws.com"
+declare -A ECR_IMG=(
+  ["tomcat:9.0"]="tomcat:9.0"
+  ["debian"]="debian"
+  ["kalilinux/kali-rolling"]="kali"
+)
+AWS_REGION="us-west-1"
+
+# Parse the number of labs to deploy
+if [[ $# -lt 1 ]]; then
+  echo "Usage: ${0##*/} <lab_count> [<terraform args>...]"
+  exit 1
+fi
+export TF_VAR_lab_count="$1"
+shift
+
+# Hot fix terraform-aws-eks module to prevent issue with count depending on
+# another ressource ==> force it to 1
+sed -ri '
+  /data\s+"cloudinit_config"\s+"linux_eks_managed_node_group"/,$ {
+    /^\s*count\s*=/c \
+      count = 1
+  }
+' "$(dirname "$0")/per_lab_infra/.terraform/modules/eks/modules/_user_data/main.tf"
+
+# Deploy common infra
+"$TERRAFORM" apply -auto-approve --common "$@"
+
+# In parallel, deploy docker containers to ECR
+aws --profile infra --region "$AWS_REGION" ecr get-login-password | docker login --username AWS --password-stdin "$ECR_URL"
+for img in "${!ECR_IMG[@]}"; do
+  {
+    docker pull "$img"
+    docker tag "$img" "$ECR_URL/${ECR_IMG[$img]}"
+    docker push "$ECR_URL/${ECR_IMG[$img]}"
+  } &
+done
+
+# Then deploy the rest of the labs
+"$TERRAFORM" apply -auto-approve --lab --parallel "$PARALLEL" "$@"
+
+# Ensure privileged PSP is disabled on all labs
+aws --profile=infra --region="$AWS_REGION" eks list-clusters | jq '.clusters[]' | tr -d '"' | while read -r cluster_name; do
+  aws --profile=infra --region="$AWS_REGION" eks update-kubeconfig --name "$cluster_name"
+  kubectl delete clusterrolebinding eks:podsecuritypolicy:authenticated
+done
